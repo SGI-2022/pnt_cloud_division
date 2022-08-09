@@ -1,39 +1,7 @@
+from traceback import format_exc
 import numpy as np 
-import polyscope as ps
-
-###################### Visualization ######################
-
-"""
-Visualize point cloud with single color.
-
-- pnts: (N, 3) numpy array of point coordinates
-"""
-def visualize_point_cloud(pnts, radius=3e-4):
-    ps.init() 
-    ps.set_up_dir('z_up')
-    ps.register_point_cloud("my points", pnts, radius=radius)
-    ps.show()
-
-
-"""
-Visualize point cloud with given color pallete. 
-Points with no color assignment will be white.
-
-- pnts: (N, 3) numpy array of point coordinates
-- color_idx: (N, 1) numpy array of indices into color pallete
-- colors: (k, 3) list of RGB values in range [0, 1]
-"""
-def visualize_point_cloud_colored(pnts, color_idx, colors, radius=8e-4):
-    ps.init() 
-    ps.set_up_dir('z_up')
-    ps_cloud = ps.register_point_cloud("my points", pnts, radius=radius)
-    pnts_color = np.ones_like(pnts)
-    color_mask = (color_idx > -1)
-    pnts_color[color_mask] = colors[color_idx[color_mask]]
-    ps_cloud.add_color_quantity('grid_labels', pnts_color, enabled=True)
-    ps.show()
-
-
+from visualize import visualize_point_cloud_colored
+from waymo_data import is_foreground
 
 ###################### Grid Division ######################
 
@@ -114,9 +82,37 @@ def split_to_grids(pnts, grid_dim):
 	return grid_indices
 
 
+###################### Label Division ######################
+
+"""
+Split the point cloud into foreground (label 1) and background (label 0).
+Return a (N, 1) numpy array of label indices.
+
+- seg_labels: (N, 1) numpy array of class labels
+"""
+def split_foreground_background(seg_labels):
+	return is_foreground(seg_labels).astype(int)
+
+
+"""
+Split the point cloud by unique (instance id, class label) pairs.
+Return a (N, 1) numpy array of unique instance indices.
+
+- labels: (N, 2) numpy array of (instance id, class label) pairs.
+"""
+def split_unique_instance(labels):
+	unique_instance_ids = np.full(len(labels), -1).astype(int)
+	instance_labels = np.unique(labels, axis=0)
+	for i in range(len(instance_labels)):
+		unique_label = instance_labels[i]
+		selection_mask = np.all(labels == unique_label, axis=1)
+		unique_instance_ids[selection_mask] = i 
+	return unique_instance_ids
+
+
 ###################### Main Script ######################
 
-if __name__ == "__main__":
+def grid_demo():
 	pnts = np.load("WaymoExamples/0025.npy")[:, :3]
 
 	grid_dim = (5, 5, 1)
@@ -125,3 +121,27 @@ if __name__ == "__main__":
 
 	colors = np.random.random((num_grids, 3)) # generate a random color pallete
 	visualize_point_cloud_colored(pnts, grid_indices, colors)
+
+
+def foreground_demo():
+	seg_labels = np.load("WaymoExamples/0025_seg.npy")[:, 1]
+	pnts = np.load("WaymoExamples/0025.npy")[:len(seg_labels), :3]
+
+	split_indices = split_foreground_background(seg_labels)
+
+	colors = np.random.random((2, 3)) # generate a random color pallete
+	visualize_point_cloud_colored(pnts, split_indices, colors)
+
+def instance_demo():
+	labels = np.load("WaymoExamples/0025_seg.npy")
+	pnts = np.load("WaymoExamples/0025.npy")[:len(labels), :3]
+
+	indices = split_unique_instance(labels)
+
+	colors = np.random.random((len(indices), 3)) # generate a random color pallete
+	visualize_point_cloud_colored(pnts, indices, colors)
+
+if __name__ == "__main__":
+	# grid_demo()
+	# foreground_demo()
+	instance_demo()
