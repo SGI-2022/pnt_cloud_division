@@ -1,7 +1,8 @@
-from traceback import format_exc
 import numpy as np 
 from visualize import visualize_point_cloud_colored
 from waymo_data import is_foreground
+from foreground_instance import ForegroundInstance
+from random import shuffle
 
 ###################### Grid Division ######################
 
@@ -110,6 +111,39 @@ def split_unique_instance(labels):
 	return unique_instance_ids
 
 
+###################### Object Centric Division ######################
+def cluster_instances(pnts_with_label, scene_id):
+	objects = []
+	instance_labels = pnts_with_label[:, 5]
+	for label in np.unique(instance_labels):
+		objects.append(
+			ForegroundInstance(pnts_with_label[instance_labels==label], scene_id)
+		)
+	return objects
+
+def object_centric_assemble(pnts_with_label1, pnts_with_label2, collision_thresh=0.1):
+	# Cluster the point cloud by instances
+	objects = cluster_instances(pnts_with_label1, 0) + cluster_instances(pnts_with_label2, 1)
+	# Randomize the order of objects
+	shuffle(objects)
+
+	# Select a subset of non-overlapping objects
+	selected_objects = []
+	for obj in objects:
+		collided = False
+		for selected_obj in selected_objects:
+			if obj.is_colliding(selected_obj, collision_thresh):
+				collided = True
+				break 
+		if not collided:
+			selected_objects.append(obj)
+
+	# Take the union of the selected objects
+	new_pnts = np.concatenate([obj.get_point_cloud() for obj in selected_objects], axis=0)
+	return new_pnts
+	
+
+
 ###################### Main Script ######################
 
 def grid_demo():
@@ -141,7 +175,58 @@ def instance_demo():
 	colors = np.random.random((len(indices), 3)) # generate a random color pallete
 	visualize_point_cloud_colored(pnts, indices, colors)
 
+def _load_data(id):
+	labels = np.load("WaymoExamples/"+id+"_seg.npy")
+	pnts = np.load("WaymoExamples/"+id+".npy")[:len(labels), :3]
+
+	fore_back_split = split_foreground_background(labels[:, 1])
+	pnts_back = pnts[fore_back_split==0]
+	pnts_fore = pnts[fore_back_split==1]
+	labels_fore = labels[fore_back_split==1]
+
+	instance_split = split_unique_instance(labels_fore)
+	instance_split = instance_split.reshape((len(instance_split), 1))
+
+	pnts_fore_with_label = np.hstack([pnts_fore, labels_fore, instance_split])
+	return pnts_back, pnts_fore_with_label
+
+def object_centric_demo():
+	pnts_back1, pnts_fore_with_label1 = _load_data("0025")
+	_, pnts_fore_with_label2 = _load_data("0084")
+	pnts_fore_with_label_merged = object_centric_assemble(pnts_fore_with_label1, pnts_fore_with_label2)
+	new_pnts = np.concatenate([pnts_back1, pnts_fore_with_label_merged[:, :3]], axis=0)
+	color_labels = np.concatenate([
+		np.full(len(pnts_back1), 2),
+		pnts_fore_with_label_merged[:, 6]
+	], axis=0).astype(int)
+	colors = np.array([
+		[0.6, 0.2, 0.3],
+		[0.1, 0.3, 0.6],
+		[0.8, 0.4, 0.4]
+	])
+	visualize_point_cloud_colored(new_pnts, color_labels, colors)
+
+
+def union_demo():
+	pnts_back1, pnts_fore_with_label1 = _load_data("0025")
+	_, pnts_fore_with_label2 = _load_data("0084")
+
+	new_pnts = np.concatenate([pnts_back1, pnts_fore_with_label1[:, :3], pnts_fore_with_label2[:, :3]], axis=0)
+	color_labels = np.concatenate([
+		np.full(len(pnts_back1), 2),
+		np.full(len(pnts_fore_with_label1), 0),
+		np.full(len(pnts_fore_with_label2), 1)
+	], axis=0).astype(int)
+	colors = np.array([
+		[0.6, 0.2, 0.3],
+		[0.1, 0.3, 0.6],
+		[0.8, 0.4, 0.4]
+	])
+	visualize_point_cloud_colored(new_pnts, color_labels, colors)
+
 if __name__ == "__main__":
 	# grid_demo()
 	# foreground_demo()
-	instance_demo()
+	# instance_demo()
+	object_centric_demo()
+	# union_demo()
