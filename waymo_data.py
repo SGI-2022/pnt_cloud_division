@@ -48,12 +48,24 @@ class SegType(Enum):
 
 """
 Check whether a given label or array of labels is foreground object,
-i.e. label 1 to 16.
+i.e. label 1 to 13.
 
 - label: int or (N, 1) numpy array of class label
 """
 def is_foreground(label):
     if isinstance(label, int):
-        return label > SegType.UNDEFINED.value and label < SegType.CURB.value
+        return label > SegType.UNDEFINED.value and label < SegType.BUILDING.value
     else:
-        return (label > SegType.UNDEFINED.value) & (label < SegType.CURB.value)
+        return (label > SegType.UNDEFINED.value) & (label < SegType.BUILDING.value)
+
+
+"""
+Check whether a given label or array of labels is vegetation (15)
+
+- label: int or (N, 1) numpy array of class label
+"""
+def is_vegetation(label):
+    if isinstance(label, int):
+        return label == SegType.VEGETATION.value 
+    else:
+        return label == SegType.VEGETATION.value

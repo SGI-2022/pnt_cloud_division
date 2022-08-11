@@ -1,8 +1,95 @@
+import re
 import numpy as np 
 from visualize import visualize_point_cloud_colored
-from waymo_data import is_foreground
-from foreground_instance import ForegroundInstance
+from waymo_data import is_foreground, is_vegetation
+from instance import Instance
 from random import shuffle
+
+
+"""
+Divide the input point cloud data into subdivision. Detailed documentation
+are attached to the functions.
+
+Inputs
+- pnts: (N, 3) point cloud coordinates
+- labels: (N, 2) instance id and class label pairs, see `waymo_data.py` for more semantic meanings
+- ... additional parameters, see below
+
+Output
+- div_ids: (N, 1) labels of subdivision for each point
+"""
+################################################################
+###################### Division Functions ######################
+################################################################
+
+"""
+Split the point cloud into grids of given dimension. 
+Return a (N, 1) numpy array of grid indices, where a grid index of -1 means no assignment.
+
+- pnts: (N, 3) numpy array of point coordinates
+- grid_dim: list of 3 integers defining the dimensions of the grids
+"""
+def split_to_grids(pnts, grid_dim):
+	pnts_bound = [
+		[pnts[:, 0].min(), pnts[:, 0].max()],
+		[pnts[:, 1].min(), pnts[:, 1].max()],
+		[pnts[:, 2].min(), pnts[:, 2].max()]
+	]
+	grid_bounds = get_grid_bounds(pnts_bound, grid_dim)
+	div_ids = add_grid_index(pnts, grid_bounds)
+	return div_ids
+
+
+"""
+Split a list of point clouds into grids of given dimension. 
+This function ensures that all point clouds are cut in the same way.
+Return a list of (N, 1) numpy arrays of grid indices, where a grid index of -1 means no assignment.
+
+- pnts: list of (N, 3) numpy arrays of point coordinates
+- grid_dim: list of 3 integers defining the dimensions of the grids
+- ref_pc_idx: index of the point cloud used to create grid frames, default to 0
+"""
+def split_to_grids_multiple(pnts_lst, grid_dim, ref_pc_idx=0):
+	ref_pnts = pnts_lst[ref_pc_idx]
+	pnts_bound = [
+		[ref_pnts[:, 0].min(), ref_pnts[:, 0].max()],
+		[ref_pnts[:, 1].min(), ref_pnts[:, 1].max()],
+		[ref_pnts[:, 2].min(), ref_pnts[:, 2].max()]
+	]
+	grid_bounds = get_grid_bounds(pnts_bound, grid_dim)
+	div_ids_lst = [add_grid_index(pnts, grid_bounds) for pnts in pnts_lst]
+	return div_ids_lst
+
+
+"""
+Split the point cloud by unique (instance id, class label) pairs.
+Return a (N, 1) numpy array of unique instance indices.
+
+- labels: (N, 2) numpy array of (instance id, class label) pairs.
+"""
+def split_unique_instance(labels):
+	unique_instance_ids = np.full(len(labels), -1).astype(int)
+	instance_labels = np.unique(labels, axis=0)
+	for i in range(len(instance_labels)):
+		unique_label = instance_labels[i]
+		selection_mask = np.all(labels == unique_label, axis=1)
+		unique_instance_ids[selection_mask] = i 
+	return unique_instance_ids
+
+
+"""
+Split the point cloud into foreground (label 1) and background (label 0).
+Return a (N, 1) numpy array of label indices.
+
+- seg_labels: (N, 1) numpy array of class labels
+"""
+def split_foreground_background(seg_labels):
+	return is_foreground(seg_labels).astype(int)
+
+
+##############################################################
+###################### Helper Functions ######################
+##############################################################
 
 ###################### Grid Division ######################
 
@@ -65,61 +152,16 @@ def add_grid_index(pnts, grid_bounds):
 	return grid_indices
 
 
-"""
-Split the point cloud into grids of given dimension. 
-Return a (N, 1) numpy array of grid indices, where a grid index of -1 means no assignment.
-
-- pnts: (N, 3) numpy array of point coordinates
-- grid_dim: list of 3 integers defining the dimensions of the grids
-"""
-def split_to_grids(pnts, grid_dim):
-	pnts_bound = [
-		[pnts[:, 0].min(), pnts[:, 0].max()],
-		[pnts[:, 1].min(), pnts[:, 1].max()],
-		[pnts[:, 2].min(), pnts[:, 2].max()]
-	]
-	grid_bounds = get_grid_bounds(pnts_bound, grid_dim)
-	grid_indices = add_grid_index(pnts, grid_bounds)
-	return grid_indices
-
-
-###################### Label Division ######################
-
-"""
-Split the point cloud into foreground (label 1) and background (label 0).
-Return a (N, 1) numpy array of label indices.
-
-- seg_labels: (N, 1) numpy array of class labels
-"""
-def split_foreground_background(seg_labels):
-	return is_foreground(seg_labels).astype(int)
-
-
-"""
-Split the point cloud by unique (instance id, class label) pairs.
-Return a (N, 1) numpy array of unique instance indices.
-
-- labels: (N, 2) numpy array of (instance id, class label) pairs.
-"""
-def split_unique_instance(labels):
-	unique_instance_ids = np.full(len(labels), -1).astype(int)
-	instance_labels = np.unique(labels, axis=0)
-	for i in range(len(instance_labels)):
-		unique_label = instance_labels[i]
-		selection_mask = np.all(labels == unique_label, axis=1)
-		unique_instance_ids[selection_mask] = i 
-	return unique_instance_ids
-
-
 ###################### Object Centric Division ######################
 def cluster_instances(pnts_with_label, scene_id):
 	objects = []
 	instance_labels = pnts_with_label[:, 5]
 	for label in np.unique(instance_labels):
 		objects.append(
-			ForegroundInstance(pnts_with_label[instance_labels==label], scene_id)
+			Instance(pnts_with_label[instance_labels==label], scene_id)
 		)
 	return objects
+
 
 def object_centric_assemble(pnts_with_label1, pnts_with_label2, collision_thresh=0.1):
 	# Cluster the point cloud by instances
@@ -144,8 +186,16 @@ def object_centric_assemble(pnts_with_label1, pnts_with_label2, collision_thresh
 	
 
 
-###################### Main Script ######################
+"""
+Choose a demo function to run as main script and see the visualization. 
+"""
+##########################################################
+###################### Demo Scripts ######################
+##########################################################
 
+"""
+Divide a point cloud into grids.
+"""
 def grid_demo():
 	pnts = np.load("WaymoExamples/0025.npy")[:, :3]
 
@@ -157,6 +207,9 @@ def grid_demo():
 	visualize_point_cloud_colored(pnts, grid_indices, colors)
 
 
+"""
+Separate a point cloud by foreground/background.
+"""
 def foreground_demo():
 	seg_labels = np.load("WaymoExamples/0025_seg.npy")[:, 1]
 	pnts = np.load("WaymoExamples/0025.npy")[:len(seg_labels), :3]
@@ -166,6 +219,10 @@ def foreground_demo():
 	colors = np.random.random((2, 3)) # generate a random color pallete
 	visualize_point_cloud_colored(pnts, split_indices, colors)
 
+
+"""
+Separate a point cloud by unique instance.
+"""
 def instance_demo():
 	labels = np.load("WaymoExamples/0025_seg.npy")
 	pnts = np.load("WaymoExamples/0025.npy")[:len(labels), :3]
@@ -174,6 +231,7 @@ def instance_demo():
 
 	colors = np.random.random((len(indices), 3)) # generate a random color pallete
 	visualize_point_cloud_colored(pnts, indices, colors)
+
 
 def _load_data(id):
 	labels = np.load("WaymoExamples/"+id+"_seg.npy")
@@ -190,6 +248,12 @@ def _load_data(id):
 	pnts_fore_with_label = np.hstack([pnts_fore, labels_fore, instance_split])
 	return pnts_back, pnts_fore_with_label
 
+
+"""
+Merge two scenes by object centric method.
+Use background of 0025 and a non-overlapping combination of the foreground objects 
+in both 0025 and 0084.
+"""
 def object_centric_demo():
 	pnts_back1, pnts_fore_with_label1 = _load_data("0025")
 	_, pnts_fore_with_label2 = _load_data("0084")
@@ -200,13 +264,17 @@ def object_centric_demo():
 		pnts_fore_with_label_merged[:, 6]
 	], axis=0).astype(int)
 	colors = np.array([
-		[0.6, 0.2, 0.3],
+		[0.7, 0.5, 0.1],
 		[0.1, 0.3, 0.6],
-		[0.8, 0.4, 0.4]
+		[0.9, 0.7, 0.7]
 	])
 	visualize_point_cloud_colored(new_pnts, color_labels, colors)
 
 
+"""
+Merge two scenes directly (as a comparison to object centric)
+Use background of 0025 and a union of the foreground objects in both 0025 and 0084.
+"""
 def union_demo():
 	pnts_back1, pnts_fore_with_label1 = _load_data("0025")
 	_, pnts_fore_with_label2 = _load_data("0084")
@@ -218,11 +286,37 @@ def union_demo():
 		np.full(len(pnts_fore_with_label2), 1)
 	], axis=0).astype(int)
 	colors = np.array([
-		[0.6, 0.2, 0.3],
+		[0.7, 0.5, 0.1],
 		[0.1, 0.3, 0.6],
-		[0.8, 0.4, 0.4]
+		[0.9, 0.7, 0.7]
 	])
 	visualize_point_cloud_colored(new_pnts, color_labels, colors)
+
+
+"""
+Segment the vegetation in 0025 as instances by clustering.
+"""
+def segmentation_demo():
+	id = "0025"
+	labels = np.load("WaymoExamples/"+id+"_seg.npy")
+	pnts = np.load("WaymoExamples/"+id+".npy")[:len(labels), :3]
+
+	pnts_labels = np.hstack([pnts, labels])[::5] # subsampled to save time
+
+	vege_mask = is_vegetation(pnts_labels[:, 4])
+	pnts_labels_vege = pnts_labels[vege_mask]
+	pnts_labels_other = pnts_labels[np.invert(vege_mask)]
+
+	vege_instance = Instance(pnts_labels_vege)
+	vege_pieces = vege_instance.subdivision(3)
+
+	new_pnts = np.insert(pnts_labels_other, 5, -1, axis=1)
+	for (i, obj) in enumerate(vege_pieces):
+		labeled_obj = np.insert(obj.get_point_cloud(False), 5, i, axis=1)
+		new_pnts = np.concatenate([new_pnts, labeled_obj], axis=0)
+
+	colors = np.random.random((len(vege_pieces), 3))
+	visualize_point_cloud_colored(new_pnts[:, :3], new_pnts[:, 5].astype(int), colors)
 
 if __name__ == "__main__":
 	# grid_demo()
@@ -230,3 +324,4 @@ if __name__ == "__main__":
 	instance_demo()
 	# object_centric_demo()
 	# union_demo()
+	# segmentation_demo()
