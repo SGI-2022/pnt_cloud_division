@@ -227,6 +227,6 @@ def union_demo():
 if __name__ == "__main__":
 	# grid_demo()
 	# foreground_demo()
-	# instance_demo()
-	object_centric_demo()
+	instance_demo()
+	# object_centric_demo()
 	# union_demo()
