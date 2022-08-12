@@ -15,7 +15,7 @@ class Instance():
         self.scene_id = scene_id
         self.pnts_with_label = pnts_with_label 
         pnts = pnts_with_label[:, :3]
-        self.center = np.mean(pnts, axis=1)
+        self.center = np.mean(pnts, axis=0)
         self.corners = np.array([
             [pnts[:, 0].min(), pnts[:, 1].min(), pnts[:, 2].min()],
             [pnts[:, 0].max(), pnts[:, 1].max(), pnts[:, 2].max()]
@@ -27,12 +27,21 @@ class Instance():
     def get_center(self):
         return self.center 
 
+    def get_box_center(self):
+        return np.sum(self.corners, axis=0)/2
 
-    def get_point_cloud(self, with_scene_id=True):
-        if with_scene_id:
-            return np.insert(self.pnts_with_label, 6, self.scene_id, axis=1)
+    def get_scene_id(self, broadcast=False):
+        if broadcast:
+            return np.full(len(self.pnts_with_label), self.scene_id)
         else:
-            return self.pnts_with_label
+            return self.scene_id
+
+    def get_radius(self):
+        return np.sqrt(np.sum((self.corners[1] - self.corners[0])**2))/2
+
+
+    def get_point_cloud(self):
+        return self.pnts_with_label
         
     """
     Check whether self is colliding with other.
