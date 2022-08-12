@@ -2,7 +2,7 @@ import numpy as np
 from visualize import visualize_point_cloud_colored
 from waymo_data import is_foreground, is_vegetation
 from instance import Instance
-from random import shuffle
+from random import shuffle, choice
 from utils import compute_distance
 
 
@@ -87,6 +87,98 @@ def split_foreground_background(seg_labels):
 	return is_foreground(seg_labels).astype(int)
 
 
+
+"""
+Synthesize a new scene with the given two point clouds. Detailed documentation
+are attached to the functions.
+
+Inputs
+- pnts1: (N1, 3) point cloud coordinates
+- pnts2: (N2, 3) point cloud coordinates
+- labels1: (N1, 2) instance id and class label pairs, see `waymo_data.py` for more semantic meanings
+- labels2: (N2, 2) instance id and class label pairs
+- ... additional parameters, see below
+
+Outputs
+- new_pnts: (M, 3) point cloud coordinates
+- new_labels: (M, 2) instance id and class label pairs
+- color_labels: (M, 1) labels for visualization
+"""
+################################################################
+###################### Assemble Functions ######################
+################################################################
+
+"""
+Split two scenes into grids and randomly select one to fill the new scene.
+
+- grid_dim: list of 3 integers defining the dimensions of the grids
+"""
+def assemble_by_grid_random(pnts1, pnts2, labels1, labels2, grid_dim=(20, 20, 1)):
+	# cut both scenes into grids 
+	[grid_id1, grid_id2] = split_to_grids_multiple([pnts1, pnts2], grid_dim)
+
+	num_grids = grid_dim[0]*grid_dim[1]*grid_dim[2]
+	selected_pnts = []
+	selected_labels = []
+	color_labels = []
+	for i in range(num_grids):
+		# randomly choose a scene
+		scene_id, scene, labels, grid_id = choice([
+			(0, pnts1, labels1, grid_id1), 
+			(1, pnts2, labels2, grid_id2)
+		]) 
+		mask = grid_id == i
+		selected_pnts.append(scene[mask])
+		selected_labels.append(labels[mask])
+		color_labels.append(np.full(np.sum(mask), scene_id))
+	new_pnts = np.concatenate(selected_pnts, axis=0)
+	new_labels = np.concatenate(selected_labels, axis=0)
+	color_labels = np.concatenate(color_labels, axis=0)
+	return new_pnts, new_labels, color_labels
+
+
+"""
+Merge two scenes by using background of scene 1 and a collision-free union 
+of foreground objects in both scenes. If background_blending is True, include 
+background points of scene 2 near the selected instances in scene 2.
+
+- background_blending: boolean, determine whether to include background of scene 2.
+- collision_thresh: float in range [0, 1], maximum percentage of overlapping volume 
+	between bounding boxes of two instances than can co-exists in the output.
+- background_range: float; points in scene 2 with distance smaller than background_range*radius 
+	from the center of an object in scene 2 will be included in the merged scene 
+"""
+def assemble_by_object(
+	pnts1, pnts2, 
+	labels1, labels2, 
+	background_blending=False,
+	collision_thresh=0.1, 
+	background_range=3.0
+	):
+	# stack points and labels, and split them by foreground/background
+	pnts_fore1, pnts_back1 = fore_back_split(pnts1, labels1)
+	pnts_fore2, pnts_back2 = fore_back_split(pnts2, labels2)
+	
+	# merge the foreground objects, optionally with background in scene 2
+	if background_blending:
+		pnts_merged, color_labels = object_centric_assemble_with_background(pnts_fore1, pnts_fore2, pnts_back2, background_range, collision_thresh)
+	else:
+		pnts_merged, color_labels = object_centric_assemble(pnts_fore1, pnts_fore2, collision_thresh)
+
+	# add background of scene 1
+	new_pnts_with_label = np.concatenate([pnts_back1, pnts_merged], axis=0)
+	# split by coodinates and labels
+	new_pnts = new_pnts_with_label[:, :3]
+	new_labels = new_pnts_with_label[:, 3:]
+
+	# compute color labels for visualization
+	color_labels = np.concatenate([
+		np.full(len(pnts_back1), 2),
+		color_labels
+	], axis=0).astype(int)
+
+	return new_pnts, new_labels, color_labels
+
 ##############################################################
 ###################### Helper Functions ######################
 ##############################################################
@@ -152,8 +244,15 @@ def add_grid_index(pnts, grid_bounds):
 	return grid_indices
 
 
-###################### Object Centric Division ######################
-def cluster_instances(pnts, scene_id):
+###################### Object Centric Assemble ######################
+
+"""
+Subdivide the pnts by instance, and return a list of Instance objects.
+
+- pnts: (N, 5) foreground point cloud data with columns of (x, y, z, instance id, class label)
+- scene_id: a unique id representing the scene, which will attached to the Instance
+"""
+def cluster_instances(pnts, scene_id=None):
 	objects = []
 	instance_labels = split_unique_instance(pnts[:, 3:])
 	for label in np.unique(instance_labels):
@@ -163,6 +262,15 @@ def cluster_instances(pnts, scene_id):
 	return objects
 
 
+"""
+Join two list of Instance objects with percentage of overlapping area smaller than collision_thresh.
+
+Return a list of Instance objects with no collision between any two of them. 
+
+- objs1, objs2: list of Instance objects
+- collision_thresh: maximum percentage of overlapping volume between bounding boxes of two 
+	instances than can co-exists in the output.
+"""
 def join_instances(objs1, objs2, collision_thresh=0.1):
 	objects = objs1 + objs2
 	# Randomize the order of objects
@@ -182,6 +290,20 @@ def join_instances(objs1, objs2, collision_thresh=0.1):
 	return selected_objects
 
 
+"""
+Join two point clouds of foreground objects without collision between any two instances.
+
+Inputs:
+- pnts_with_label1: (P1, 5) foreground point cloud data of scene 1 with columns 
+	of (x, y, z, instance id, class label)
+- pnts_with_label2: (Q1, 5) foreground point cloud data of scene 2
+- collision_thresh: maximum percentage of overlapping volume between bounding boxes of two 
+	instances than can co-exists in the output.
+
+Outputs:
+- new_pnts: (M, 5) point cloud
+- color_labels: (M, 1) array labeling the scene id of the output points
+"""
 def object_centric_assemble(pnts_with_label1, pnts_with_label2, collision_thresh=0.1):
 	# Cluster the point cloud by instances
 	objs1 = cluster_instances(pnts_with_label1, 0) 
@@ -196,12 +318,31 @@ def object_centric_assemble(pnts_with_label1, pnts_with_label2, collision_thresh
 	return new_pnts, color_labels
 
 
+"""
+Join two point clouds of foreground objects without collision between any two instances.
+
+Inputs:
+- pnts_with_label1: (P1, 5) foreground point cloud data of scene 1 
+	with columns of (x, y, z, instance id, class label)
+- pnts_with_label2: (Q1, 5) foreground point cloud data of scene 2
+- pnts_back2: (Q2, 5) background point cloud data of scene 2
+- background_range: float; points in scene 2 with distance smaller than background_range*radius 
+	from the center of an object in scene 2 will be included in the merged scene 
+- collision_thresh: maximum percentage of overlapping volume between bounding boxes of two 
+	instances than can co-exists in the output.
+
+Outputs:
+- new_pnts: (M, 5) point cloud
+- color_labels: (M, 1) array labeling the scene id of the output points, where 
+	{0: scene 1 foreground, 1: scene 2 foreground, 2: scene 1 background, 3: scene 2 background}
+"""
 def object_centric_assemble_with_background(
 	pnts_with_label1, 
 	pnts_with_label2, 
 	pnts_back2, 
 	background_range=1.5,
 	collision_thresh=0.1):
+
 	# Cluster the point cloud by instances
 	objs1 = cluster_instances(pnts_with_label1, 0) 
 	objs2 = cluster_instances(pnts_with_label2, 1)
@@ -233,9 +374,27 @@ def object_centric_assemble_with_background(
 	color_labels = np.concatenate([color_labels, np.full(len(selected_back), 3)], axis=0)
 
 	return new_pnts, color_labels
+
+###################### Data Loading ####################
+
+"""
+Stack point cloud coordinates and labels, and then split them by foreground and background.
+"""
+def fore_back_split(pnts, labels):
+	pnts_with_labels = np.hstack([pnts, labels])
+
+	fore_back_split = split_foreground_background(labels[:, 1])
+	pnts_fore = pnts_with_labels[fore_back_split==1]
+	pnts_back = pnts_with_labels[fore_back_split==0]
 	
+	return pnts_fore, pnts_back
 
 
+def load_data(id, directory="WaymoExamples/"):
+	labels = np.load(directory+id+"_seg.npy")
+	pnts = np.load(directory+id+".npy")[:len(labels), :3]
+	return pnts, labels
+	
 """
 Choose a demo function to run as main script and see the visualization. 
 """
@@ -283,37 +442,16 @@ def instance_demo():
 	visualize_point_cloud_colored(pnts, indices, colors)
 
 
-def _load_data(id):
-	labels = np.load("WaymoExamples/"+id+"_seg.npy")
-	pnts = np.load("WaymoExamples/"+id+".npy")[:len(labels), :3]
-	pnts_with_labels = np.hstack([pnts, labels])
-
-	fore_back_split = split_foreground_background(labels[:, 1])
-	pnts_fore = pnts_with_labels[fore_back_split==1]
-	pnts_back = pnts_with_labels[fore_back_split==0]
-	
-	return pnts_fore, pnts_back
-
-
 """
 Merge two scenes by object centric method.
 Use background of 0025 and a non-overlapping combination of the foreground objects 
 in both 0025 and 0084.
 """
 def object_centric_demo(blend_background=False):
-	pnts_fore1, pnts_back1 = _load_data("0025")
-	pnts_fore2, pnts_back2 = _load_data("0084")
-	
-	if blend_background:
-		pnts_merged, color_labels = object_centric_assemble_with_background(pnts_fore1, pnts_fore2, pnts_back2, 3)
-	else:
-		pnts_merged, color_labels = object_centric_assemble(pnts_fore1, pnts_fore2)
-	new_pnts = np.concatenate([pnts_back1, pnts_merged], axis=0)[:, :3]
+	pnts1, labels1 = load_data("0025")
+	pnts2, labels2 = load_data("0084")
 
-	color_labels = np.concatenate([
-		np.full(len(pnts_back1), 2),
-		color_labels
-	], axis=0).astype(int)
+	new_pnts, _, color_labels = assemble_by_object(pnts1, pnts2, labels1, labels2, blend_background)
 
 	colors = np.array([
 		[31, 70, 144],
@@ -330,8 +468,11 @@ Merge two scenes directly (as a comparison to object centric)
 Use background of 0025 and a union of the foreground objects in both 0025 and 0084.
 """
 def union_demo():
-	pnts_fore1, pnts_back1 = _load_data("0025")
-	pnts_fore2, pnts_back2 = _load_data("0084")
+	pnts1, labels1 = load_data("0025")
+	pnts2, labels2 = load_data("0084")
+
+	pnts_fore1, pnts_back1 = fore_back_split(pnts1, labels1)
+	pnts_fore2, _ = fore_back_split(pnts2, labels2)
 
 	new_pnts = np.concatenate([pnts_back1, pnts_fore1, pnts_fore2], axis=0)[:, :3]
 	color_labels = np.concatenate([
@@ -339,6 +480,7 @@ def union_demo():
 		np.full(len(pnts_fore1), 0),
 		np.full(len(pnts_fore2), 1)
 	], axis=0).astype(int)
+
 	colors = np.array([
 		[31, 70, 144],
 		[255, 165, 0],
@@ -373,10 +515,30 @@ def segmentation_demo():
 	colors = np.random.random((len(vege_pieces), 3))
 	visualize_point_cloud_colored(new_pnts[:, :3], new_pnts[:, 5].astype(int), colors)
 
+
+"""
+Merge two scenes by randomized grid method.
+"""
+def random_grid_demo():
+	pnts1, labels1 = load_data("0025")
+	pnts2, labels2 = load_data("0084")
+
+	new_pnts, _, color_labels = assemble_by_grid_random(pnts1, pnts2, labels1, labels2)
+
+	colors = np.array([
+		[31, 70, 144],
+		[255, 165, 0],
+		[108, 141, 210],
+		[255, 229, 180]
+	]) / 255
+
+	visualize_point_cloud_colored(new_pnts, color_labels, colors)
+
 if __name__ == "__main__":
 	# grid_demo()
 	# foreground_demo()
 	# instance_demo()
-	object_centric_demo(True)
+	object_centric_demo(blend_background=True)
 	# union_demo()
 	# segmentation_demo()
+	# random_grid_demo()
