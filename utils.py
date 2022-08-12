@@ -20,3 +20,15 @@ Compute euclidean distances from p to pnts.
 """
 def compute_distance(p, pnts):
     return np.sum((pnts - p) ** 2, axis=1)
+
+
+"""
+Convert lst to numpy array.
+
+- lst: python list or numpy array that needs to be numpy array
+"""
+def arr(lst):
+    if isinstance(lst, np.ndarray):
+        return lst 
+    else:
+        return np.array(lst)

@@ -1,5 +1,6 @@
 import numpy as np 
 import polyscope as ps
+from utils import arr
 
 """
 Visualize point cloud with single color.
@@ -7,6 +8,9 @@ Visualize point cloud with single color.
 - pnts: (N, 3) numpy array of point coordinates
 """
 def visualize_point_cloud(pnts, radius=3e-4):
+    # Make sure input is numpy array
+    pnts = arr(pnts)
+
     ps.init() 
     ps.set_up_dir('z_up')
     ps.register_point_cloud("my points", pnts, radius=radius)
@@ -19,9 +23,12 @@ Points with no color assignment will be white.
 
 - pnts: (N, 3) numpy array of point coordinates
 - color_idx: (N, 1) numpy array of indices into color pallete
-- colors: (k, 3) list of RGB values in range [0, 1]
+- colors: (k, 3) array of RGB values in range [0, 1]
 """
 def visualize_point_cloud_colored(pnts, color_idx, colors, radius=8e-4):
+    # Make sure inputs are numpy array
+    pnts, color_idx, colors = arr(pnts), arr(color_idx), arr(colors)
+
     ps.init() 
     ps.set_up_dir('z_up')
     ps_cloud = ps.register_point_cloud("my points", pnts, radius=radius)
