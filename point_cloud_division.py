@@ -113,6 +113,82 @@ Split two scenes into grids and randomly select one to fill the new scene.
 
 - grid_dim: list of 3 integers defining the dimensions of the grids
 """
+
+def radius_and_center(pnts, seg_labels):
+	seg_labels = seg_labels[:, 1]
+	
+	store = {}
+	for i in range(len(seg_labels)):
+		label = seg_labels[i]
+		if(label not in store):
+			store[label] = []
+		store[label].append(pnts[i])
+
+	mean = {}
+	for instance in store:
+		mean[instance] = np.mean(store[instance], axis=0)
+	
+	radius = {}
+	for instance in store:
+		rad = 0
+		center  = mean[instance]
+		for i in range(len(store[instance])):
+			pt = store[instance][i]
+			diff = center - pt
+			dist = np.sum(diff**2)**(0.5)
+			rad = max(rad, dist)
+
+		radius[instance] = rad
+	
+
+	return mean, radius, store
+
+def assemble_randomly(pnts1, pnts2, labels1, labels2):
+	# cut both scenes into grids 
+	center1, radius1, points1 = radius_and_center(pnts1, labels1)
+	center2, radius2, points2 = radius_and_center(pnts2, labels2)
+
+	selected_pnts = []
+	selected_labels = []
+	color_labels = []
+
+	disjoint_selected_pnts = []
+	disjoint_selected_labels = []
+	disjoint_color_labels = []
+
+	for instance1 in points1:
+		dummy_var = 1
+		for instance2 in points2:
+			dist_rad = radius1[instance1] + radius2[instance2]
+			diff = center1[instance1] - center2[instance2]
+			dist_centers = np.sum(diff**2)**(0.5)
+			if(dist_centers < dist_rad): # they overlap
+				dummy_var = 0
+				scene_id, scene, labels = choice([
+					(0, pnts1, labels1), 
+					(1, pnts2, labels2)
+				]) 
+				mask = np.random.randint(0,2)
+
+				selected_pnts.append(scene[mask])
+				selected_labels.append(labels[mask])
+				color_labels.append(np.full(np.sum(mask), scene_id))
+				
+		if(dummy_var == 1):
+			disjoint_selected_pnts.append(scene[mask])
+			disjoint_selected_labels.append(labels[mask])
+			disjoint_color_labels.append(np.full(np.sum(mask), scene_id))
+
+	new_pnts = np.concatenate(selected_pnts, axis=0)
+	new_labels = np.concatenate(selected_labels, axis=0)
+	color_labels = np.concatenate(color_labels, axis=0)
+	return new_pnts, new_labels, color_labels
+
+"""
+Split two scenes into grids and randomly select one to fill the new scene.
+
+- grid_dim: list of 3 integers defining the dimensions of the grids
+"""
 def assemble_by_grid_random(pnts1, pnts2, labels1, labels2, grid_dim=(20, 20, 1)):
 	# cut both scenes into grids 
 	[grid_id1, grid_id2] = split_to_grids_multiple([pnts1, pnts2], grid_dim)
@@ -534,11 +610,31 @@ def random_grid_demo():
 
 	visualize_point_cloud_colored(new_pnts, color_labels, colors)
 
+
+"""
+Merge two overlapping scenes by randomly.
+"""
+def random_assemble_demo():
+	pnts1, labels1 = load_data("0025")
+	pnts2, labels2 = load_data("0084")
+
+	new_pnts, _, color_labels = assemble_randomly(pnts1, pnts2, labels1, labels2)
+
+	colors = np.array([
+		[31, 70, 144],
+		[255, 165, 0],
+		[108, 141, 210],
+		[255, 229, 180]
+	]) / 255
+
+	visualize_point_cloud_colored(new_pnts, color_labels, colors)
+
 if __name__ == "__main__":
 	# grid_demo()
 	# foreground_demo()
 	# instance_demo()
-	object_centric_demo(blend_background=True)
+	# object_centric_demo(blend_background=True)
 	# union_demo()
 	# segmentation_demo()
 	# random_grid_demo()
+	random_assemble_demo()
